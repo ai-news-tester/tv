@@ -2,9 +2,11 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width,
-      initial-scale=1.0" />
-    <title>IPTV Live Channels (Debug Mode)</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0"
+    />
+    <title>IPTV Channels (Debug Mode)</title>
     <style>
       body {
         font-family: Arial, sans-serif;
@@ -42,6 +44,11 @@
         font-size: 0.85rem;
         font-weight: bold;
       }
+      img {
+        max-width: 100px;
+        display: block;
+        margin: 0 auto 10px;
+      }
     </style>
   </head>
   <body>
@@ -49,73 +56,77 @@
     <p id="status">Loading playlist...</p>
     <div id="channels"></div>
     <script>
+      // Set to true for extra debugging output in the console.
       const DEBUG = true;
       function log(...args) {
         if (DEBUG) console.log(...args);
       }
 
       /**
-       * Fetch the playlist using the AllOrigins proxy.
+       * Fetches the playlist using the CORS Anywhere proxy.
+       * IMPORTANT: Before using this proxy, visit:
+       * https://cors-anywhere.herokuapp.com/corsdemo
+       * and request temporary access.
        */
       function fetchPlaylist() {
+        // The IPTV M3U+ playlist URL you provided:
         const playlistUrl =
           "http://tkosportz.live:25461/get.php?username=jmdpirate&password=864569&type=m3u_plus";
+        // Use the CORS Anywhere proxy:
         const proxyUrl =
-          "https://api.allorigins.hexocode.repl.co/get?disableCache=true&url=" +
-          encodeURIComponent(playlistUrl);
+          "https://cors-anywhere.herokuapp.com/" + playlistUrl;
         log("Fetching playlist from:", proxyUrl);
         return fetch(proxyUrl)
           .then((res) => {
             if (!res.ok) {
               throw new Error("Network response was not ok.");
             }
-            return res.json();
-          })
-          .then((data) => data.contents);
+            return res.text();
+          });
       }
 
       /**
-       * Parse the M3U playlist text into an array of channel objects.
-       *
+       * Parses an M3U playlist into an array of channel objects.
        * Each #EXTINF line is parsed for attributes (like tvg-logo, tvg-name)
-       * and the text after the comma is used as the channel display name.
-       * The subsequent non-comment line is assumed to be the stream URL.
+       * and the text after the comma is used as the channel name.
+       * The next non-comment line is assumed to be the stream URL.
        */
       function parsePlaylist(text) {
         const lines = text.split("\n");
         const channels = [];
         let currentChannel = null;
-        for (let line of lines) {
+        lines.forEach((line) => {
           line = line.trim();
           if (line.startsWith("#EXTINF:")) {
-            // Use regex to extract key="value" pairs.
+            // Extract key="value" pairs.
             const regex = /(\w+?)="(.*?)"/g;
             const attr = {};
             let match;
             while ((match = regex.exec(line)) !== null) {
               attr[match[1]] = match[2];
             }
-            // The text after the comma is used as the channel name.
+            // The text after the comma is our display name.
             const commaIndex = line.indexOf(",");
             if (commaIndex !== -1) {
               attr.name = line.substring(commaIndex + 1).trim();
             }
             currentChannel = attr;
           } else if (line && !line.startsWith("#")) {
+            // The URL follows the #EXTINF line.
             if (currentChannel) {
               currentChannel.url = line;
               channels.push(currentChannel);
               currentChannel = null;
             }
           }
-        }
+        });
         return channels;
       }
 
       /**
-       * Check if a channel is live by trying to load its video metadata.
-       * This creates a hidden video element with crossOrigin set to "anonymous".
-       * The promise resolves to true if metadata loads within 5 seconds, else false.
+       * Checks whether a channel’s stream is "live" by trying to load its metadata.
+       * A hidden video element is created with crossOrigin set to "anonymous".
+       * If metadata loads within 5 seconds, the channel is assumed live.
        */
       function checkChannel(channel) {
         return new Promise((resolve) => {
@@ -123,7 +134,7 @@
           video.crossOrigin = "anonymous";
           video.preload = "metadata";
           video.src = channel.url;
-  
+
           let resolved = false;
           const timer = setTimeout(() => {
             if (!resolved) {
@@ -132,7 +143,7 @@
               resolve(false);
             }
           }, 5000);
-  
+
           video.addEventListener("loadedmetadata", () => {
             if (!resolved) {
               resolved = true;
@@ -149,13 +160,12 @@
               resolve(false);
             }
           });
-          // Start loading the stream.
           video.load();
         });
       }
 
       /**
-       * Display channels along with a live/offline indicator.
+       * Displays channels along with a live/offline indicator.
        */
       function displayChannels(channels) {
         const container = document.getElementById("channels");
@@ -165,7 +175,6 @@
             "<p>No channels to display. Perhaps none are live.</p>";
           return;
         }
-  
         channels.forEach((ch) => {
           const div = document.createElement("div");
           div.className = "channel";
@@ -173,8 +182,9 @@
             ch.isLive ? "LIVE" : "OFFLINE"
           }</div>`;
           if (ch["tvg-logo"]) {
-            html += `<img src="${ch["tvg-logo"]}" alt="${ch.name ||
-              "Channel"} logo" style="max-width:100px"/>`;
+            html += `<img src="${ch["tvg-logo"]}" alt="${
+              ch.name || "Channel"
+            } logo" />`;
           }
           html += `<h3>${ch.name || "Unnamed Channel"}</h3>`;
           if (ch["tvg-name"]) {
@@ -192,13 +202,11 @@
       }
 
       /**
-       * Update channels by fetching the playlist, parsing it,
-       * checking every channel's live status, and then displaying them.
+       * Fetches the playlist, parses it, checks each channel, and displays them.
        */
       function updateChannels() {
         document.getElementById("status").textContent =
           "Updating channels...";
-  
         fetchPlaylist()
           .then((playlistText) => {
             log("Playlist fetched successfully.");
@@ -209,8 +217,7 @@
                 "No channels found in the playlist.";
               return;
             }
-  
-            // Check all channels for live status.
+            // Check live status for each channel.
             Promise.all(
               channels.map((ch) =>
                 checkChannel(ch).then((isLive) => {
@@ -228,11 +235,11 @@
           .catch((error) => {
             console.error("Error fetching playlist:", error);
             document.getElementById("status").textContent =
-              "Error loading playlist.";
+              "Error loading playlist: " + error.message;
           });
       }
-  
-      // Update channels on initial load and every 10 minutes.
+
+      // Update channels on initial load and then every 10 minutes.
       document.addEventListener("DOMContentLoaded", () => {
         updateChannels();
         setInterval(updateChannels, 600000); // 600,000 ms = 10 minutes
