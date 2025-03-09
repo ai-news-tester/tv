@@ -2,8 +2,11 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>IPTV Live Channels</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0"
+    />
+    <title>IPTV Live Channels (Batched Live Check)</title>
     <style>
       body {
         font-family: Arial, sans-serif;
@@ -36,6 +39,7 @@
         width: 220px;
         box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
         text-align: center;
+        position: relative;
       }
       .channel img {
         max-width: 100%;
@@ -72,10 +76,6 @@
       .offline .indicator {
         background: #f44336;
       }
-      .channel-container {
-        position: relative;
-        width: 220px;
-      }
     </style>
   </head>
   <body>
@@ -84,12 +84,34 @@
     <div id="channels"></div>
 
     <script>
-      // Fetch the playlist from a local file (uploaded to GitHub Pages) 
-      // This avoids any CORS issues with external requests.
+      //--- CONCURRENCY LIMIT FUNCTION ---
+      // asyncPool limits the number of concurrent promises.
+      async function asyncPool(poolLimit, array, iteratorFn) {
+        const ret = [];
+        const executing = [];
+        for (const item of array) {
+          const p = Promise.resolve().then(() => iteratorFn(item));
+          ret.push(p);
+          if (poolLimit <= array.length) {
+            const e = p.then(() =>
+              executing.splice(executing.indexOf(e), 1)
+            );
+            executing.push(e);
+            if (executing.length >= poolLimit) {
+              await Promise.race(executing);
+            }
+          }
+        }
+        return Promise.all(ret);
+      }
+
+      //--- PLAYLIST FETCHING & PARSING ---
+      // Fetch the playlist from the locally hosted "playlist.m3u"
       function fetchPlaylist() {
-        // Make sure you have uploaded your playlist file as "playlist.m3u"
         return fetch("playlist.m3u").then((res) => {
-          if (!res.ok) throw new Error("Unable to fetch playlist file");
+          if (!res.ok) {
+            throw new Error("Unable to fetch playlist file");
+          }
           return res.text();
         });
       }
@@ -102,14 +124,12 @@
         lines.forEach((line) => {
           line = line.trim();
           if (line.startsWith("#EXTINF:")) {
-            // Extract attributes (e.g. tvg-logo, tvg-name, etc.) using regex.
             const regex = /(\w+?)="(.*?)"/g;
             const attr = {};
             let match;
             while ((match = regex.exec(line)) !== null) {
               attr[match[1]] = match[2];
             }
-            // The text after the comma is the channel name.
             const commaIndex = line.indexOf(",");
             if (commaIndex !== -1) {
               attr.name = line.substring(commaIndex + 1).trim();
@@ -126,15 +146,14 @@
         return channels;
       }
 
-      // Check if a channel’s stream is live by attempting to load its metadata.
-      // This function creates a hidden video element to test if metadata loads within 5 seconds.
+      //--- LIVE CHECK FUNCTION ---
+      // Checks if a channel’s stream is live by using a hidden video element.
       function checkChannel(channel) {
         return new Promise((resolve) => {
           const video = document.createElement("video");
           video.crossOrigin = "anonymous";
           video.preload = "metadata";
           video.src = channel.url;
-
           let resolved = false;
           const timer = setTimeout(() => {
             if (!resolved) {
@@ -160,13 +179,11 @@
               resolve(false);
             }
           });
-          // Start loading the stream.
           video.load();
         });
       }
 
-      // Display the channels on the page.
-      // Each channel will show as LIVE or OFFLINE based on the check.
+      //--- DISPLAY CHANNELS ---
       function displayChannels(channels) {
         const container = document.getElementById("channels");
         container.innerHTML = "";
@@ -177,32 +194,26 @@
         }
         channels.forEach((ch) => {
           const div = document.createElement("div");
-          // Container div to allow positioning of the live/offline indicator.
-          div.className = "channel-container";
-          let innerHTML = `<div class="channel ${
-            ch.isLive ? "live" : "offline"
-          }">`;
-          innerHTML += `<div class="indicator">${
+          div.className = "channel " + (ch.isLive ? "live" : "offline");
+          let html = `<div class="indicator">${
             ch.isLive ? "LIVE" : "OFFLINE"
           }</div>`;
           if (ch["tvg-logo"]) {
-            innerHTML += `<img src="${ch["tvg-logo"]}" alt="${
+            html += `<img src="${ch["tvg-logo"]}" alt="${
               ch.name || "Channel"
             } Logo" />`;
           }
-          innerHTML += `<h3>${ch.name || "Unnamed Channel"}</h3>`;
+          html += `<h3>${ch.name || "Unnamed Channel"}</h3>`;
           if (ch["tvg-name"]) {
-            innerHTML += `<p>${ch["tvg-name"]}</p>`;
+            html += `<p>${ch["tvg-name"]}</p>`;
           }
-          innerHTML += `<p><a href="${ch.url}" target="_blank">Watch Stream</a></p>`;
-          innerHTML += `</div>`;
-          div.innerHTML = innerHTML;
+          html += `<p><a href="${ch.url}" target="_blank">Watch Stream</a></p>`;
+          div.innerHTML = html;
           container.appendChild(div);
         });
       }
 
-      // Main function to update channels.
-      // This fetches the local playlist file, parses it, checks each channel, and updates the UI.
+      //--- MAIN UPDATE FUNCTION ---
       function updateChannels() {
         document.getElementById("status").textContent =
           "Updating channels...";
@@ -214,15 +225,13 @@
                 "No channels found in the playlist.";
               return;
             }
-            // Check live status for every channel.
-            const liveChecks = channels.map((ch) =>
-              checkChannel(ch).then((isLive) => {
-                ch.isLive = isLive;
-                return ch;
-              })
-            );
-            Promise.all(liveChecks).then((results) => {
-              displayChannels(results);
+            // Limit concurrent live-checks to 10 at a time.
+            asyncPool(10, channels, checkChannel).then((liveStatuses) => {
+              // Combine each channel with its live status.
+              channels.forEach((ch, i) => {
+                ch.isLive = liveStatuses[i];
+              });
+              displayChannels(channels);
               document.getElementById("status").textContent =
                 "Last Updated: " + new Date().toLocaleString();
             });
@@ -234,10 +243,10 @@
           });
       }
 
-      // Update channels immediately on load and then every 10 minutes.
+      //--- INITIALIZE & AUTO-UPDATE ---
       document.addEventListener("DOMContentLoaded", () => {
         updateChannels();
-        setInterval(updateChannels, 600000); // 600,000 ms = 10 minutes
+        setInterval(updateChannels, 600000); // Every 10 minutes.
       });
     </script>
   </body>
