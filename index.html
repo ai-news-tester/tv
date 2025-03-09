@@ -69,22 +69,19 @@
     </div>
 
     <script>
-      // Will hold channel data once the playlist is fetched
+      // Global variable to hold channel data.
       let channelsList = [];
-  
+
       document.addEventListener("DOMContentLoaded", function () {
         // Your provided playlist URL
         const playlistUrl =
           "http://tv.nova-iptv.com:80/get.php?username=Antonia_Baumgartner&password=kYa7tNPpje&type=m3u_plus";
-        // Using AllOrigins proxy to bypass CORS issues:
-        const proxyUrl =
-          "https://api.allorigins.hexocode.repl.co/get?disableCache=true&url=" +
-          encodeURIComponent(playlistUrl);
-  
+        // Using Thingproxy as a proxy to bypass CORS issues:
+        const proxyUrl = "https://thingproxy.freeboard.io/fetch/" + playlistUrl;
+
         fetch(proxyUrl)
-          .then((response) => response.json())
-          .then((data) => {
-            const playlist = data.contents;
+          .then((response) => response.text())
+          .then((playlist) => {
             channelsList = parsePlaylist(playlist);
             if (channelsList.length === 0) {
               document.getElementById("channels").innerHTML =
@@ -93,7 +90,7 @@
             }
             // Do an immediate live status update.
             updateLiveChannels();
-            // Then re-run live status check every 10 minutes (600,000ms)
+            // Re-run live status check every 10 minutes (600,000ms)
             setInterval(updateLiveChannels, 600000);
           })
           .catch((error) => {
@@ -102,36 +99,33 @@
               "<p>Error loading playlist.</p>";
           });
       });
-  
+
       // Parses the M3U playlist text and returns an array of channel objects.
       function parsePlaylist(text) {
         const lines = text.split("\n");
         let channels = [];
         let currentChannel = null;
-  
+
         lines.forEach((line) => {
           line = line.trim();
           if (line.startsWith("#EXTINF:")) {
-            // Example format:
+            // Example:
             // #EXTINF:-1 tvg-id="123" tvg-name="Channel One" tvg-logo="http://logo.png",
             // Channel One
             const regex = /(\w+?)="(.*?)"/g;
             let attr = {};
             let match;
-  
             while ((match = regex.exec(line)) !== null) {
               attr[match[1]] = match[2];
             }
-  
-            // Get display name (text after comma)
+            // Get display name (text after the comma)
             const commaIndex = line.indexOf(",");
             if (commaIndex !== -1) {
               attr.name = line.substring(commaIndex + 1).trim();
             }
-  
             currentChannel = attr;
           } else if (line && !line.startsWith("#")) {
-            // The non-comment line after #EXTINF is assumed to be the stream URL.
+            // Next non-comment line assumed to be stream URL.
             if (currentChannel) {
               currentChannel.url = line;
               channels.push(currentChannel);
@@ -139,67 +133,59 @@
             }
           }
         });
-  
         return channels;
       }
-  
-      // Updates the live channels list by checking each channel.
+
+      // Updates the list of live channels.
       function updateLiveChannels() {
         const container = document.getElementById("channels");
         container.innerHTML = "<p>Checking live channels...</p>";
-  
-        // Create an array of promises for each channel's live check.
+
         const checks = channelsList.map((channel) =>
           checkChannel(channel).then((isLive) => ({ channel, isLive }))
         );
-  
+
         Promise.all(checks).then((results) => {
           container.innerHTML = "";
-  
-          // Update the timestamp.
           document.getElementById("update-time").textContent =
             new Date().toLocaleString();
-  
+
           const liveChannels = results.filter((result) => result.isLive);
-  
+
           if (liveChannels.length === 0) {
             container.innerHTML =
               "<p>No live channels available at the moment.</p>";
             return;
           }
-  
+
           liveChannels.forEach((result) => {
             const item = document.createElement("div");
             item.className = "channel";
-  
+
             let html = "";
             if (result.channel["tvg-logo"]) {
-              html += `<img src="${result.channel["tvg-logo"]}" alt="${
-                result.channel.name
-              }" />`;
+              html += `<img src="${result.channel["tvg-logo"]}" alt="${result.channel.name}" />`;
             }
             html += `<h3>${result.channel.name}</h3>`;
             if (result.channel["tvg-name"]) {
               html += `<p>${result.channel["tvg-name"]}</p>`;
             }
-            html += `<a href="${result.channel.url}" target="_blank">
-                Watch Stream</a>`;
+            html += `<a href="${result.channel.url}" target="_blank">Watch Stream</a>`;
             item.innerHTML = html;
             container.appendChild(item);
           });
         });
       }
-  
-      // Checks if a channel's stream is live by attempting to load video metadata.
-      // Resolves with true if metadata loads within 5 seconds, otherwise false.
+
+      // Checks if a channel's stream is live by trying to load video metadata.
+      // Resolves true if metadata loads within 5 seconds, otherwise false.
       function checkChannel(channel) {
         return new Promise((resolve) => {
           const video = document.createElement("video");
           video.preload = "metadata";
           video.src = channel.url;
-  
+
           let resolved = false;
-          // 5 seconds timeout for each channel check.
           const timeout = setTimeout(() => {
             if (!resolved) {
               resolved = true;
@@ -207,7 +193,7 @@
               resolve(false);
             }
           }, 5000);
-  
+
           video.addEventListener("loadedmetadata", () => {
             if (!resolved) {
               resolved = true;
@@ -216,7 +202,6 @@
               resolve(true);
             }
           });
-  
           video.addEventListener("error", () => {
             if (!resolved) {
               resolved = true;
@@ -225,8 +210,8 @@
               resolve(false);
             }
           });
-  
-          // Start loading the stream
+
+          // Start loading the stream.
           video.load();
         });
       }
