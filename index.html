@@ -2,8 +2,9 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>IPTV Live Channels</title>
+    <meta name="viewport" content="width=device-width,
+      initial-scale=1.0" />
+    <title>IPTV Live Channels (Debug Mode)</title>
     <style>
       body {
         font-family: Arial, sans-serif;
@@ -14,225 +15,228 @@
       h1 {
         text-align: center;
       }
-      #last-updated {
+      #status {
         text-align: center;
         font-size: 0.9rem;
         color: #333;
         margin-bottom: 20px;
       }
       #channels {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 20px;
-        justify-content: center;
+        max-width: 800px;
+        margin: auto;
       }
       .channel {
         background: #fff;
         border: 1px solid #ddd;
-        border-radius: 8px;
+        border-radius: 5px;
         padding: 10px;
-        width: 200px;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-        text-align: center;
+        margin: 5px 0;
       }
-      .channel img {
-        max-width: 100%;
-        margin-bottom: 10px;
+      .offline {
+        opacity: 0.5;
       }
-      .channel h3 {
-        font-size: 1.1rem;
-        margin: 0.5em 0;
+      .live {
+        border-left: 5px solid #4caf50;
       }
-      .channel p {
-        font-size: 0.9rem;
-        color: #666;
-      }
-      .channel a {
-        display: inline-block;
-        margin-top: 10px;
-        padding: 5px 10px;
-        background: #2196f3;
-        color: #fff;
-        text-decoration: none;
-        border-radius: 4px;
-        font-size: 0.9rem;
+      .indicator {
+        font-size: 0.85rem;
+        font-weight: bold;
       }
     </style>
   </head>
   <body>
-    <h1>IPTV Live Channels</h1>
-    <div id="last-updated">
-      Last Updated: <span id="update-time">Never</span>
-    </div>
-    <div id="channels">
-      <p>Loading channels...</p>
-    </div>
-
+    <h1>IPTV Channels (Debug Mode)</h1>
+    <p id="status">Loading playlist...</p>
+    <div id="channels"></div>
     <script>
-      // Update channels on load and every 10 minutes
-      document.addEventListener("DOMContentLoaded", () => {
-        updateChannels();
-        setInterval(updateChannels, 600000); // 600,000 ms = 10 minutes
-      });
+      const DEBUG = true;
+      function log(...args) {
+        if (DEBUG) console.log(...args);
+      }
 
       /**
-       * Fetch the M3U playlist via Thingproxy,
-       * parse it and check each channel for "live" status.
+       * Fetch the playlist using the AllOrigins proxy.
        */
-      function updateChannels() {
-        const container = document.getElementById("channels");
-        container.innerHTML = "<p>Loading channels...</p>";
-
-        // Playlist URL you provided:
+      function fetchPlaylist() {
         const playlistUrl =
           "http://tkosportz.live:25461/get.php?username=jmdpirate&password=864569&type=m3u_plus";
-        // Use Thingproxy to bypass CORS issues:
-        const proxyUrl = "https://thingproxy.freeboard.io/fetch/" + playlistUrl;
-
-        fetch(proxyUrl)
-          .then((response) => response.text())
-          .then((playlistText) => {
-            const channels = parsePlaylist(playlistText);
-            if (channels.length === 0) {
-              container.innerHTML =
-                "<p>No channels found in the playlist.</p>";
-              return;
+        const proxyUrl =
+          "https://api.allorigins.hexocode.repl.co/get?disableCache=true&url=" +
+          encodeURIComponent(playlistUrl);
+        log("Fetching playlist from:", proxyUrl);
+        return fetch(proxyUrl)
+          .then((res) => {
+            if (!res.ok) {
+              throw new Error("Network response was not ok.");
             }
-            // For every channel, test if it is live.
-            const liveChecks = channels.map((channel) =>
-              checkChannel(channel).then((isLive) => {
-                channel.isLive = isLive;
-                return channel;
-              })
-            );
-
-            Promise.all(liveChecks).then((results) => {
-              // Filter channels that passed the live check.
-              const liveChannels = results.filter((ch) => ch.isLive);
-              displayChannels(liveChannels);
-              document.getElementById("update-time").textContent =
-                new Date().toLocaleString();
-            });
+            return res.json();
           })
-          .catch((error) => {
-            console.error("Error fetching playlist:", error);
-            container.innerHTML = "<p>Error loading playlist.</p>";
-          });
+          .then((data) => data.contents);
       }
 
       /**
        * Parse the M3U playlist text into an array of channel objects.
-       * Each channel object may have attributes such as tvg-logo, tvg-name,
-       * and a display name (derived from the text after the EXTINF line's comma),
-       * plus the stream URL.
+       *
+       * Each #EXTINF line is parsed for attributes (like tvg-logo, tvg-name)
+       * and the text after the comma is used as the channel display name.
+       * The subsequent non-comment line is assumed to be the stream URL.
        */
       function parsePlaylist(text) {
         const lines = text.split("\n");
         const channels = [];
         let currentChannel = null;
-
-        lines.forEach((line) => {
+        for (let line of lines) {
           line = line.trim();
           if (line.startsWith("#EXTINF:")) {
-            // Extract attributes using regex.
+            // Use regex to extract key="value" pairs.
             const regex = /(\w+?)="(.*?)"/g;
             const attr = {};
             let match;
             while ((match = regex.exec(line)) !== null) {
               attr[match[1]] = match[2];
             }
-            // The text following the comma is used as the channel name.
+            // The text after the comma is used as the channel name.
             const commaIndex = line.indexOf(",");
             if (commaIndex !== -1) {
               attr.name = line.substring(commaIndex + 1).trim();
             }
             currentChannel = attr;
           } else if (line && !line.startsWith("#")) {
-            // The line immediately after the EXTINF is assumed to be the stream URL.
             if (currentChannel) {
               currentChannel.url = line;
               channels.push(currentChannel);
               currentChannel = null;
             }
           }
-        });
+        }
         return channels;
       }
 
       /**
-       * Checks whether a channel’s stream is live.
-       * This is done by creating a hidden video element with crossOrigin set to "anonymous",
-       * setting its src to the channel URL, and waiting up to 5 seconds for metadata to load.
-       * The promise resolves to true if metadata loads, and false if it errors or times out.
+       * Check if a channel is live by trying to load its video metadata.
+       * This creates a hidden video element with crossOrigin set to "anonymous".
+       * The promise resolves to true if metadata loads within 5 seconds, else false.
        */
       function checkChannel(channel) {
         return new Promise((resolve) => {
           const video = document.createElement("video");
-          // Set crossOrigin to try to help with CORS
           video.crossOrigin = "anonymous";
           video.preload = "metadata";
           video.src = channel.url;
-
+  
           let resolved = false;
-          const timeout = setTimeout(() => {
+          const timer = setTimeout(() => {
             if (!resolved) {
               resolved = true;
               video.remove();
               resolve(false);
             }
           }, 5000);
-
+  
           video.addEventListener("loadedmetadata", () => {
             if (!resolved) {
               resolved = true;
-              clearTimeout(timeout);
+              clearTimeout(timer);
               video.remove();
               resolve(true);
             }
           });
-
           video.addEventListener("error", () => {
             if (!resolved) {
               resolved = true;
-              clearTimeout(timeout);
+              clearTimeout(timer);
               video.remove();
               resolve(false);
             }
           });
-
           // Start loading the stream.
           video.load();
         });
       }
 
       /**
-       * Displays only the channels that are determined to be live.
+       * Display channels along with a live/offline indicator.
        */
       function displayChannels(channels) {
         const container = document.getElementById("channels");
+        container.innerHTML = "";
         if (channels.length === 0) {
           container.innerHTML =
-            "<p>No live channels available at the moment.</p>";
+            "<p>No channels to display. Perhaps none are live.</p>";
           return;
         }
-        container.innerHTML = "";
-        channels.forEach((channel) => {
+  
+        channels.forEach((ch) => {
           const div = document.createElement("div");
           div.className = "channel";
-          let html = "";
-          // If a logo is provided, include it.
-          if (channel["tvg-logo"]) {
-            html += `<img src="${channel["tvg-logo"]}" alt="${channel.name} logo" />`;
+          let html = `<div class="indicator">${
+            ch.isLive ? "LIVE" : "OFFLINE"
+          }</div>`;
+          if (ch["tvg-logo"]) {
+            html += `<img src="${ch["tvg-logo"]}" alt="${ch.name ||
+              "Channel"} logo" style="max-width:100px"/>`;
           }
-          html += `<h3>${channel.name || "Unnamed Channel"}</h3>`;
-          if (channel["tvg-name"]) {
-            html += `<p>${channel["tvg-name"]}</p>`;
+          html += `<h3>${ch.name || "Unnamed Channel"}</h3>`;
+          if (ch["tvg-name"]) {
+            html += `<p>${ch["tvg-name"]}</p>`;
           }
-          html += `<a href="${channel.url}" target="_blank">Watch Stream</a>`;
+          html += `<p><a href="${ch.url}" target="_blank">Watch Stream</a></p>`;
           div.innerHTML = html;
+          if (ch.isLive) {
+            div.classList.add("live");
+          } else {
+            div.classList.add("offline");
+          }
           container.appendChild(div);
         });
       }
+
+      /**
+       * Update channels by fetching the playlist, parsing it,
+       * checking every channel's live status, and then displaying them.
+       */
+      function updateChannels() {
+        document.getElementById("status").textContent =
+          "Updating channels...";
+  
+        fetchPlaylist()
+          .then((playlistText) => {
+            log("Playlist fetched successfully.");
+            const channels = parsePlaylist(playlistText);
+            log("Parsed channels:", channels);
+            if (!channels.length) {
+              document.getElementById("status").textContent =
+                "No channels found in the playlist.";
+              return;
+            }
+  
+            // Check all channels for live status.
+            Promise.all(
+              channels.map((ch) =>
+                checkChannel(ch).then((isLive) => {
+                  ch.isLive = isLive;
+                  return ch;
+                })
+              )
+            ).then((results) => {
+              log("Live check results:", results);
+              displayChannels(results);
+              document.getElementById("status").textContent =
+                "Last Updated: " + new Date().toLocaleString();
+            });
+          })
+          .catch((error) => {
+            console.error("Error fetching playlist:", error);
+            document.getElementById("status").textContent =
+              "Error loading playlist.";
+          });
+      }
+  
+      // Update channels on initial load and every 10 minutes.
+      document.addEventListener("DOMContentLoaded", () => {
+        updateChannels();
+        setInterval(updateChannels, 600000); // 600,000 ms = 10 minutes
+      });
     </script>
   </body>
 </html>
